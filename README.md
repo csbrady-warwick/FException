@@ -326,7 +326,104 @@ It is worth mentioning that the "test" method also has the same varieties as the
 
 The difference between "test"-ing for an error and "catch"-ing one is whether the error state is unset. A call to "catch" will unset the error state(s) that were being caught so that that error state is no longer active. A call to "test" will simply check whether any of the error state(s) tested for were true without unsetting them. The logical return value from both functions will be the same if they are called with the same parameters.
 
-It is worth noting that the most common uses of the two functions are different. One would usually use "catch" with one or more exception handles to test for specific exceptions. This is because generally you should only be catching exceptions that you know how to deal with the problem that the raised exception indicates. 
+It is worth noting that the most common uses of the two functions are different. One would usually use "catch" with one or more exception handles to test for specific exceptions. This is because generally you should only be catching exceptions that you know how to deal with the problem that the raised exception indicates.
+
+### An annotated FException code
+
+This example using register_error, raise and test you are making use of most of the common features of FException so it makes sense to annotate an example using it to make clear what each line is doing
+
+
+```Fortran
+module demo
+
+  !Make use of the fexception module
+  use fexception_mod
+  implicit none
+  !Handles for specific exceptions are held in an fexception_handle object
+  !All registered exceptions *must* have their own handle or they cannot be raised
+  type(fexception_handle) :: lt0, gt10
+
+  contains
+
+  subroutine demo_sub(value)
+    integer, intent(in) :: value
+    !At the top level of a code above which no errors can be caught you should define an fexception object
+    !FException objects represent all of the possible error states that a code can have and whether any
+    !given exception is currently active or not
+    type(fexception) :: exception
+
+    !Pass the FException object to all functions below the top level function as INTENT(INOUT) parameters
+    call core(value, exception)
+    !At each level if there are specific exceptions that you can handle if they "bubble up" from lower layers
+    !test for them being active by using the catch method. Catching an error causes the catch method to return
+    !.TRUE. and also unsets the error state so that it will not stop the code
+    if (exception%catch(lt0)) then
+      print *, "Exception handled for value ", value
+    end if
+
+    !At each layer when it is possible that an uncaught exception can occur you should call the test method
+    !and return immediately. This is a weakness of FException being a library and not a core language feature
+    !in C++ or Python exceptions immediately cause the code to go back up through the function stack until
+    !one function can handle the exception. With FException you have to mimic this by manually RETURNing
+    !from a function if there are unhandled exceptions
+    if (exception%test()) return
+
+  end subroutine demo_sub
+
+  subroutine core(value, exception)
+    integer, intent(in) :: value
+    type(fexception), intent(inout) :: exception
+
+    if (value < 0) then
+      !Here you raise an exception by handle. You can optionally specify a message for the specific error
+      !that occurred. This message is combined with the message that was created when the exception handle
+      !was created if an error message needs to be printed. Note that once again, simply raising the exception
+      !doesn't cause you to return from this function (unlike Python and C++) so you have to do it manually
+      call exception%raise(lt0,message="There was an error", &
+          file = __FILE__, line = __LINE__)
+      return
+    end if
+
+    if (value > 10) then
+      !The overall approach is the same for raising all exceptions - only the handle changes
+      call exception%raise(gt10,message="There was an error", &
+          file = __FILE__, line = __LINE__)
+      return
+    end if
+
+    print *, 'Handling value ', value
+
+  end subroutine core
+
+end module demo
+
+program demo_prog
+  use demo
+  implicit none
+
+  !Register the exceptions that this code can cause
+  !Since exceptions are not a core part of Fortran there are no
+  !built in exceptions unlike in C++ or Python - they are all custom
+  lt0 = register_error("Less than zero", exit_code = -1)
+  gt10 = register_error("Greater than zero", exit_code = -2)
+
+  !This function is called with a value between 0 and 10 so no exception is raised
+  call demo_sub(5)
+  print *,'5 works fine'
+
+  !-1 causes the lt0 exception to be raised but it is caught in demo_sub so the code doesn't exit
+  call demo_sub(-1)
+  print *,'-1 is an error but a handleable one'
+
+  !15 causes the gt10 exception to be raised and it is not caught so immediately after demo_sub exits
+  !the code will error stop
+  call demo_sub(15)
+  print *,'You will never see this line because 15 is not handleable'
+
+end program demo_prog
+```
+
+It is important to note again that this is applying an "exception like" layer to Fortran that is not a natural part of the language so there are some inelegances to the implementation. You have to manually return from a function after raising an error. After a call to a function that might have raised an exception you have to call the test method of the FException object and return manually if that returns true to keep the error propagating upwards properly (if you fail to do this then the exception will still happen if the code keeps running but only after other parts of your code have run, so if the error that the exception represents will cause your code to crash, not testing for the exception will mean that your code crashes without printing the exception information). Having said this, FException is a robust mechanism for handling arbitrary error states in Fortran, and is quicker to implement than using your own error handling.
 
 ### Manually exiting on error
 
